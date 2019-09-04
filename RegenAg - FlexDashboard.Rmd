@@ -1,0 +1,498 @@
+---
+title: "Regenerative Agriculture Focused Funds"
+output:
+  flexdashboard::flex_dashboard
+runtime: shiny
+---
+
+```{r setup,include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+
+library(googlesheets)
+library(tidyverse)
+library(dplyr)
+library(usmap)
+library(shiny)
+library(readxl)
+library(data.table)
+library(knitr)
+library(scales)
+library(formattable)
+library(usethis)
+
+# Set working directory
+setwd("~/Desktop/Croatan/RAISER RegenAg/regenerative_ag")
+
+# Load RegenAg Database
+regen_ag <- 
+  read_excel("RegenAg Database.xlsx", 
+             sheet= "Copy of Investable Strategies", 
+             skip = 2) %>%
+  subset(is.na(Exclude))
+
+# Load Places database
+places <- read_excel("Database tables.xlsx", sheet = "places")
+
+# Load state map
+states_map <- map_data("state")
+
+# Load world map
+world_map <- map_data("world") %>%
+  filter(region != "Antarctica")
+
+# Currency format function
+format_money <- function(x) {
+  sapply(x, function(y) {
+    if (!is.na(y)) {
+      div <- findInterval(y, c(1, 1e3, 1e6, 1e9, 1e12))
+      paste0("$", round(y / 10^(3*(div - 1)), 1), c("", "K", "M", "B", "T")[div])
+    } else {
+      NA
+    }
+  })
+}
+
+# Percentage format function
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+
+# Outersect function
+outersect <- function(x, y) {
+  sort(c(setdiff(x, y),
+         setdiff(y, x)))
+}
+
+```
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r fund}
+
+selectInput(
+  "firm", label = h3("Select a Firm:"),
+  choices = regen_ag$`Firm / Asset Manager`
+)
+
+renderUI({
+  
+  selectInput(
+    "fund", label = h4("Select a Fund:"),
+    choices = 
+      (regen_ag %>%
+         filter(`Firm / Asset Manager` == input$firm) %>%
+         pull(`Product Name`)
+      )
+  )
+
+}
+)
+
+```
+
+----  
+#### Asset Class
+
+```{r asset class}
+
+  renderText({
+
+asset_class <- 
+  regen_ag %>%
+  filter(`Product Name`== input$fund) %>%
+  select(`Cash and equivalents`:`Real Assets`) %>%
+  select(which(. != "")) %>%
+    colnames()
+
+ asset_class
+
+  })
+```
+
+
+----
+#### Fund Size  
+
+```{r fund size}
+
+renderText({
+  
+  size <- reactive({
+    
+    fund_size <- regen_ag %>%
+      filter(`Product Name`== input$fund) %>%
+      pull(`Actual Fund/Product Size`)
+    
+    as.numeric(fund_size)
+  })
+  
+  format_money(size())
+}
+)
+
+```
+    
+----
+#### Ag Exposure
+
+```{r exposure}
+
+renderText({
+  
+  expo <- 
+    regen_ag %>% 
+    filter(`Product Name`== input$fund) %>%
+    pull(`Ag Exposure`)
+  
+  if (expo == "Partial") {
+    "Partial"
+  }
+  else {
+    percent(as.numeric(expo))
+  }
+  
+})
+
+```
+
+----
+#### Manager Certification
+
+```{r}
+  
+renderText({
+  
+  certifications <- 
+    regen_ag %>%
+    filter(`Product Name`== input$fund) %>%
+    select(`B Corp`:PRI) %>%
+    select(which(. != "")) %>%
+    colnames()
+  
+  if (length(certifications) == 0) {
+    "No Certifications"
+  }
+  else {
+    certifications
+  }
+  
+})
+
+```
+
+Column
+-------------------------------------
+
+#### About
+
+```{r About}
+  
+renderText({
+  
+  description <- reactive({
+    ESG <- regen_ag %>%
+      filter(`Product Name`== input$fund) %>%
+      pull(`ESG Description of product for RAISER`)
+    
+    ESG
+  })
+  
+  description()
+  
+})
+
+```
+
+----
+#### Regenerative Agriculture Criteria  
+
+```{r criteria}
+
+renderTable({
+  
+  criteria <- 
+    regen_ag %>%
+    filter(`Product Name`== input$fund) %>%
+    select(`Regenerative Ag Branded`:`Sustainable Livelihoods`) %>%
+    select(which(. != "")) %>%
+    colnames()
+  
+  if (length(criteria) == 0) {
+    "No Criteria Found"
+  }
+  else {
+    criteria
+  }
+  
+},
+
+align = 'l',
+hover = TRUE,
+width = "auto",
+colnames = FALSE,
+caption = NULL
+)
+  
+```
+
+----
+#### Regional Focus
+
+```{r region}
+
+renderTable({
+  
+  regional_focus <- 
+    regen_ag %>%
+    filter(`Product Name`== input$fund) %>%
+    pull(`Regional Focus`)
+  
+  regional_focus <- str_split(as.character(regional_focus), "; ")
+  
+  if (length(regional_focus) == 0) {
+    "NA"
+  }
+  else {
+    regional_focus
+  }
+  
+},
+
+align = 'l',
+hover = TRUE,
+width = "auto",
+colnames = FALSE,
+caption = NULL
+)
+
+# renderTable({
+#   
+#   us_regional_focus <- 
+#     regen_ag %>%
+#     filter(`Product Name` == input$fund) %>%
+#     pull(US)
+#   
+#   us_regional_focus <- str_split(as.character(us_regional_focus), "; ")
+#   
+#   if (length(us_regional_focus) == 0) {
+#     "NA"
+#   } else {
+#     us_regional_focus
+#   }
+# },
+# align = 'l',
+# hover = TRUE,
+# width = "auto",
+# colnames = FALSE,
+# caption = NULL
+# )
+
+```
+
+```{r map}
+    
+global_regions <- 
+  places %>%
+  filter(level == 2) %>%
+  pull(name)
+
+fund_places <- 
+  
+  reactive({
+    selected_places <- 
+      regen_ag %>%
+      filter(`Product Name`== input$fund) %>%
+      pull(`Regional Focus`) %>%
+      str_split("; ") %>%
+      pluck(1)
+    
+    selected_global_regions <- intersect(selected_places, global_regions)
+    
+    selected_countries <- outersect(selected_places, global_regions)
+    
+    if (length(selected_global_regions) == 0) {
+      fund_places <- selected_places
+    } else {
+      fund_places <- NULL
+      
+      for (selected_global_region in selected_global_regions) {
+        fund_places <- 
+          c(
+            fund_places,
+            places %>%
+              filter(grepl(selected_global_region, region)) %>%
+              pull(name)
+          )
+      }
+      
+      # fund_places a list of all countries in selected_global_regions
+      # but doesn't contain any of the selected_countries
+      fund_places <- c(fund_places, selected_countries)
+    }
+    
+    fund_places
+  })
+
+regions <- 
+      places %>%
+      filter(level == 4) %>%
+      pull(name)
+    
+    fund_states <- 
+      
+      reactive({
+      selected_states <-
+        regen_ag %>%
+        filter(`Product Name`== input$fund) %>%
+        pull(`Regional Focus`) %>%
+        str_split("; ") %>%
+        pluck(1)
+      
+      selected_regions <- intersect(selected_states, regions)
+      
+      selected_additional_states <- outersect(selected_states, regions)
+      
+      if (length(selected_regions) == 0) {
+        fund_states <- selected_states
+      } else {
+        fund_states <- NULL
+        
+        for (selected_region in selected_regions) {
+          fund_states <- 
+            c(
+              fund_states, 
+              places %>% 
+                filter(grepl(selected_region, region)) %>%
+                pull(name)
+            )
+        }
+
+        fund_states <- c(fund_states, selected_additional_states)
+      }
+      
+      fund_states
+    })
+
+    renderPlot({
+      
+      if ("United States" %in% fund_places()) {
+        
+        plot_states <- fund_states()
+        
+        ggplot(states_map, aes(long, lat, group = group)) +
+          geom_polygon(fill = "grey", color = "white") +
+          geom_polygon(
+            data = states_map %>%
+              filter(region %in% tolower(plot_states)),
+            fill = "darkgreen",
+            color = "white",
+            alpha = .6
+          ) +
+          coord_fixed(1.3) +
+          theme_void()
+        
+      # } else if ("Global" %in% fund_places()) {
+      #   
+      #   plot_world <- unique(world_map$region)
+      #   
+      #   ggplot(world_map, aes(long, lat, group=group)) +
+      #     geom_polygon(fill = "grey", color = "white") +
+      #     geom_polygon(
+      #       data = world_map %>%
+      #         filter(region %in% plot_world),
+      #       fill = "darkgreen",
+      #       color = "white",
+      #       alpha = .6
+      #     ) +
+      #     coord_fixed(1.3) +
+      #     theme_void()
+        
+      } else {
+        
+        plot_world <- fund_places()
+        
+        if ("Global" %in% plot_world) {
+          plot_world <- unique(world_map$region)
+        }
+        
+        ggplot(world_map, aes(long, lat, group=group)) +
+          geom_polygon(fill = "grey", color = "white") +
+          geom_polygon(
+            data = world_map %>%
+              filter(region %in% plot_world),
+            fill = "darkgreen",
+            color = "white",
+            alpha = .6
+          ) +
+          coord_fixed(1.3) +
+          theme_void()
+        
+        
+      }
+      
+    })
+    
+
+# regions <- 
+#   places %>%
+#   filter(level == 4) %>%
+#   pull(name)
+# 
+# fund_states <- 
+#   
+#   reactive({
+#     selected_states <-
+#       regen_ag %>%
+#       filter(`Product Name`== input$fund) %>%
+#       pull(US) %>%
+#       str_split("; ") %>%
+#       pluck(1)
+#     
+#     selected_regions <- intersect(selected_states, regions)
+#     
+#     if (length(selected_regions) == 0) {
+#       fund_states <- selected_states
+#     } else {
+#       fund_states <- NULL
+#       
+#       for (selected_region in selected_regions) {
+#         fund_states <- 
+#           c(
+#             fund_states, 
+#             places %>% 
+#               filter(grepl(selected_region, region)) %>%
+#               pull(name)
+#           )
+#       }
+#     }
+#   
+#     fund_states
+#     
+#   })
+# 
+# renderPlot({
+#   
+#   if ("United States" %in% fund_states()) {
+#     plot_states <- unique(states_map$region)
+#   } else {
+#     plot_states <- fund_states()
+#   }
+#   
+#   ggplot(states_map, aes(long, lat, group = group)) +
+#     geom_polygon(fill = "grey", color = "white") +
+#     geom_polygon(
+#       data = states_map %>%
+#         filter(region %in% tolower(plot_states)),
+#       fill = "darkgreen",
+#       color = "white",
+#       alpha = .6
+#     ) +
+#     coord_fixed(1.3) +
+#     theme_void()
+#   
+# })
+
+```
+
